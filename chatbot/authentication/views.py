@@ -43,12 +43,19 @@ def loginPage(request):
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-        first_name = request.POST.get('first_name')
+        
+        
+        print("username", username)
+        print("password", password)
+      
 
         user = authenticate(request, username=username, password=password)
+        
+        print(user)
 
         if user is not None:
             login(request, user)
+            first_name = user.first_name 
             if user.groups.filter(name='Parent').exists():
                 ParentLogin.objects.create(parent=user)
             if user.groups.filter(name='Teacher').exists():

@@ -20,104 +20,100 @@ from django.core.exceptions import MultipleObjectsReturned
 # Create your views here.
 @login_required
 def teacher(request):
-    if request.user.is_authenticated:
-        try:
-            user_details = request.user.auth_user_details
-        except auth_user_details.DoesNotExist:
-            return HttpResponse("User details do not exist.")
-
-        # Retrieve all teachers associated with the current user
-        teachers = Teacher.objects.filter(teacher=user_details)
-
-        if teachers.exists():
-            # Initialize lists to store data
-            instrument_data = []
-            student_progress = []
-            attendance_data = []
-
-            # Fetch only the instruments taught by the teacher
-            instruments_taught = Instrument.objects.filter(teacher__in=teachers)
-
-            # Prepare instruments for dropdown
-            instruments_choices = instruments_taught.values('instrument_minor_name', 'instrument_major_name')
-
-            for instrument in instruments_taught:
-                students_under_instrument = Student.objects.filter(assigned_teacher=user_details.user, instrument=instrument)
-                student_progress_query = ProgressBar.objects.filter(student__in=students_under_instrument)
-
-                # Calculate average progress
-                if student_progress_query.exists():
-                    average_progress = student_progress_query.aggregate(avg_progress=Avg('result'))['avg_progress']
-                else:
-                    average_progress = 0
-
-                instrument_data.append({
-                    'instrument_name': instrument.instrument_minor_name,
-                    'instrument_minor_name': instrument.instrument_minor_name,
-                    'average_progress': average_progress,
-                    'students_count': students_under_instrument.count()
-                })
-
-            # Retrieve student progress for all students taught by this teacher
-            students = Student.objects.filter(assigned_teacher=user_details.user).annotate(
-                pass_progress_count=Count('progressbar', filter=Q(progressbar__result__in=['3', '4', '5']))
-            )
-
-            for student in students:
-                total_modules = ModuleDetails.objects.filter(
-                    bookInstrument__bookID_id=student.book_id,
-                    bookInstrument__instrumentID_id=student.instrument_id
-                ).count()
-
-                pass_modules = ProgressBar.objects.filter(student=student, result__in=['3', '4', '5']).count()
-
-                if total_modules > 0:
-                    progress_percentage = (pass_modules / total_modules) * 100
-                else:
-                    progress_percentage = 0
-
-                student_progress.append({
-                    'studentName': student.studentName,
-                    'progress_percentage': progress_percentage,
-                    'total_modules': total_modules,
-                    'student_id': student.id
-                })
-
-            # Retrieve attendance data for all students taught by this teacher
-            attendance_data_query = Attendance.objects.filter(
-                teacher_email=user_details.user,
-                status='Approved'
-            ).annotate(
-                week=ExtractWeek('date'),
-                year=ExtractYear('date')
-            ).values('student__id', 'student__studentName', 'week', 'year').annotate(
-                attendance_count=Count('id', filter=Q(attendance='Attend')),
-                absence_count=Count('id', filter=Q(attendance='Absent'))
-            )
-
-            attendance_data.extend(attendance_data_query)
-
-            # Prepare context for rendering the template
-            context = {
-                'first_name': request.user.first_name,
-                'last_name': request.user.last_name,
-                'students_count': Student.objects.filter(assigned_teacher=user_details.user).count(),
-                'total_instruments_taught': instruments_taught.count(),
-                'instrument_data': instrument_data,
-                'instruments_choices': instruments_choices,
-                'student_progress': json.dumps(student_progress),
-                'attendance_data': json.dumps(list(attendance_data))
-            }
-
-            return render(request, 'master_teacher.html', context)
-        
-        else:
-            return HttpResponse("Teacher record does not exist for the logged-in user.")
-
-    else:
+    if not request.user.is_authenticated:
         return HttpResponse("You are not logged in.")
 
+    try:
+        user_details = request.user.auth_user_details
+    except auth_user_details.DoesNotExist:
+        return HttpResponse("User details do not exist.")
 
+    # Retrieve or create the Teacher record
+    teacher_record, created = Teacher.objects.get_or_create(teacher=user_details)
+
+    # From here, we always have a valid Teacher object
+    teachers = Teacher.objects.filter(teacher=user_details)
+
+    # Initialize lists to store data
+    instrument_data = []
+    student_progress = []
+    attendance_data = []
+
+    # Fetch only the instruments taught by the teacher
+    instruments_taught = Instrument.objects.filter(teacher__in=teachers)
+
+    # Prepare instruments for dropdown
+    instruments_choices = instruments_taught.values('instrument_minor_name', 'instrument_major_name')
+
+    for instrument in instruments_taught:
+        students_under_instrument = Student.objects.filter(
+            assigned_teacher=user_details.user,
+            instrument=instrument
+        )
+        student_progress_query = ProgressBar.objects.filter(student__in=students_under_instrument)
+
+        # Calculate average progress
+        if student_progress_query.exists():
+            average_progress = student_progress_query.aggregate(avg_progress=Avg('result'))['avg_progress']
+        else:
+            average_progress = 0
+
+        instrument_data.append({
+            'instrument_name': instrument.instrument_minor_name,
+            'instrument_minor_name': instrument.instrument_minor_name,
+            'average_progress': average_progress,
+            'students_count': students_under_instrument.count()
+        })
+
+    # Retrieve student progress for all students taught by this teacher
+    students = Student.objects.filter(assigned_teacher=user_details.user).annotate(
+        pass_progress_count=Count('progressbar', filter=Q(progressbar__result__in=['3', '4', '5']))
+    )
+
+    for student in students:
+        total_modules = ModuleDetails.objects.filter(
+            bookInstrument__bookID_id=student.book_id,
+            bookInstrument__instrumentID_id=student.instrument_id
+        ).count()
+
+        pass_modules = ProgressBar.objects.filter(student=student, result__in=['3', '4', '5']).count()
+
+        progress_percentage = (pass_modules / total_modules) * 100 if total_modules > 0 else 0
+
+        student_progress.append({
+            'studentName': student.studentName,
+            'progress_percentage': progress_percentage,
+            'total_modules': total_modules,
+            'student_id': student.id
+        })
+
+    # Retrieve attendance data for all students taught by this teacher
+    attendance_data_query = Attendance.objects.filter(
+        teacher_email=user_details.user,
+        status='Approved'
+    ).annotate(
+        week=ExtractWeek('date'),
+        year=ExtractYear('date')
+    ).values('student__id', 'student__studentName', 'week', 'year').annotate(
+        attendance_count=Count('id', filter=Q(attendance='Attend')),
+        absence_count=Count('id', filter=Q(attendance='Absent'))
+    )
+
+    attendance_data.extend(attendance_data_query)
+
+    # Prepare context for rendering the template
+    context = {
+        'first_name': request.user.first_name,
+        'last_name': request.user.last_name,
+        'students_count': Student.objects.filter(assigned_teacher=user_details.user).count(),
+        'total_instruments_taught': instruments_taught.count(),
+        'instrument_data': instrument_data,
+        'instruments_choices': instruments_choices,
+        'student_progress': json.dumps(student_progress),
+        'attendance_data': json.dumps(list(attendance_data))
+    }
+
+    return render(request, 'master_teacher.html', context)
 
 
 @teacher_required
